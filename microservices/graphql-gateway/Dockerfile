@@ -50,6 +50,7 @@ RUN apk add --no-cache \
     bash \
     curl \
     jq \
+    yq \
     kubectl \
     git \
     libc6-compat
