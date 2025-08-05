@@ -1,0 +1,132 @@
+---
+# Argo Workflow Template for GraphQL Gateway Repository Creation
+# This template is used by the OAM ComponentDefinition to create GraphQL gateway repositories
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: graphql-gateway-template
+  namespace: argo
+spec:
+  entrypoint: create-graphql-gateway
+  templates:
+  - name: create-graphql-gateway
+    inputs:
+      parameters:
+      - name: repository-name
+      - name: app-container
+      - name: namespace
+      - name: gateway-name
+      - name: docker-registry
+        value: "docker.io"
+      - name: docker-username
+        value: "socrates12345"
+      - name: gitops-repo
+        value: "health-service-idp-gitops"
+    steps:
+    - - name: create-repository
+        template: github-repo-creator
+        arguments:
+          parameters:
+          - name: repo-name
+            value: "{{inputs.parameters.repository-name}}"
+          - name: template-repo
+            value: "graphql-federation-gateway"
+          - name: description
+            value: "GraphQL Federation Gateway for {{inputs.parameters.app-container}}"
+            
+    - - name: customize-template
+        template: template-customizer
+        arguments:
+          parameters:
+          - name: repo-name
+            value: "{{inputs.parameters.repository-name}}"
+          - name: app-container
+            value: "{{inputs.parameters.app-container}}"
+          - name: namespace
+            value: "{{inputs.parameters.namespace}}"
+          - name: gateway-name
+            value: "{{inputs.parameters.gateway-name}}"
+          - name: docker-registry
+            value: "{{inputs.parameters.docker-registry}}"
+          - name: docker-username
+            value: "{{inputs.parameters.docker-username}}"
+          - name: gitops-repo
+            value: "{{inputs.parameters.gitops-repo}}"
+            
+    - - name: initial-commit
+        template: git-committer
+        arguments:
+          parameters:
+          - name: repo-name
+            value: "{{inputs.parameters.repository-name}}"
+          - name: commit-message
+            value: "Initial GraphQL gateway setup from template"
+            
+  - name: github-repo-creator
+    inputs:
+      parameters:
+      - name: repo-name
+      - name: template-repo
+      - name: description
+    container:
+      image: ghcr.io/shlapolosa/github-actions-runner:latest
+      command: [bash, -c]
+      args:
+      - |
+        # Create repository from template
+        gh repo create "{{inputs.parameters.repo-name}}" \
+          --template "{{inputs.parameters.template-repo}}" \
+          --description "{{inputs.parameters.description}}" \
+          --private
+          
+  - name: template-customizer
+    inputs:
+      parameters:
+      - name: repo-name
+      - name: app-container
+      - name: namespace
+      - name: gateway-name
+      - name: docker-registry
+      - name: docker-username
+      - name: gitops-repo
+    container:
+      image: ghcr.io/shlapolosa/github-actions-runner:latest
+      command: [bash, -c]
+      args:
+      - |
+        # Clone the repository
+        git clone "https://github.com/$GITHUB_OWNER/{{inputs.parameters.repo-name}}.git" /tmp/repo
+        cd /tmp/repo
+        
+        # Replace template variables
+        find . -type f \( -name "*.yaml" -o -name "*.yml" -o -name "*.json" -o -name "*.md" -o -name "Dockerfile" \) -exec sed -i \
+          -e "s/{{ GATEWAY_NAME }}/{{inputs.parameters.gateway-name}}/g" \
+          -e "s/{{ APP_CONTAINER }}/{{inputs.parameters.app-container}}/g" \
+          -e "s/{{ NAMESPACE }}/{{inputs.parameters.namespace}}/g" \
+          -e "s/{{ DOCKER_REGISTRY }}/{{inputs.parameters.docker-registry}}/g" \
+          -e "s/{{ DOCKER_USERNAME }}/{{inputs.parameters.docker-username}}/g" \
+          -e "s/{{ GITOPS_REPO }}/{{inputs.parameters.gitops-repo}}/g" \
+          {} +
+          
+        # Move templates to final locations
+        mv templates/Dockerfile.template microservices/{{inputs.parameters.gateway-name}}/Dockerfile
+        mv templates/knative-service.yaml.template microservices/{{inputs.parameters.gateway-name}}/knative-service.yaml
+        mv templates/configmap.yaml.template microservices/{{inputs.parameters.gateway-name}}/configmap.yaml
+        rm -rf templates
+        
+        # Commit changes
+        git add -A
+        git commit -m "Customize template for {{inputs.parameters.gateway-name}}"
+        git push
+        
+  - name: git-committer
+    inputs:
+      parameters:
+      - name: repo-name
+      - name: commit-message
+    container:
+      image: ghcr.io/shlapolosa/github-actions-runner:latest
+      command: [bash, -c]
+      args:
+      - |
+        echo "Repository {{inputs.parameters.repo-name}} created and customized successfully"
