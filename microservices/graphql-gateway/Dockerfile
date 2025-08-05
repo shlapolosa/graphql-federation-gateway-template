@@ -33,7 +33,7 @@ RUN npm install --legacy-peer-deps
 COPY src/ ./src/
 COPY mesh-config-template.yaml ./
 COPY generate-mesh-config.sh ./
-COPY server.js ./
+# Main entry point is src/index.js
 COPY start.sh ./
 
 # Make scripts executable
@@ -62,7 +62,7 @@ COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/src ./src
 COPY --from=builder /app/mesh-config-template.yaml ./
 COPY --from=builder /app/generate-mesh-config.sh ./
-COPY --from=builder /app/server.js ./
+# Main entry point is src/index.js (already copied with src/)
 COPY --from=builder /app/start.sh ./
 COPY --from=builder /app/package*.json ./
 
