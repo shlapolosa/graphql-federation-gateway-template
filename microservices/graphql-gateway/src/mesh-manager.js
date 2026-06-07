@@ -107,10 +107,7 @@ class MeshManager {
         openapi: {
           source: service.openApiUrl || `${service.url}/openapi.json`,
           baseUrl: service.url,
-          operationHeaders: {
-            'User-Agent': 'GraphQL-Mesh-Gateway/1.0',
-            'Accept': 'application/json'
-          }
+          operationHeaders: this.buildOperationHeaders()
         }
       },
       transforms: [
@@ -152,6 +149,112 @@ class MeshManager {
     };
 
     return config;
+  }
+
+  /**
+   * Build operationHeaders for an openapi source.
+   * GQL-1 (#155): when FORWARD_AUTH is enabled (default true) the gateway forwards
+   * the incoming Authorization header (the caller's JWT, already validated by APIM)
+   * to every upstream via the GraphQL Mesh `{context.headers.<name>}` interpolation,
+   * so in-cluster services receive the original bearer token.
+   * @returns {Object} operationHeaders map
+   */
+  buildOperationHeaders() {
+    const headers = {
+      'User-Agent': 'GraphQL-Mesh-Gateway/1.0',
+      'Accept': 'application/json'
+    };
+    if (process.env.FORWARD_AUTH !== 'false') {
+      headers['Authorization'] = '{context.headers.authorization}';
+    }
+    return headers;
+  }
+
+  /**
+   * GQL-1 (#155): apply the authoritative explicit source list from the MESH_SOURCES
+   * env var (JSON), bypassing kubectl service discovery entirely. Set by the
+   * graphql-gateway CD when the OAM declares `sources:` (auto-filled by app.submit
+   * from sibling webservices). Each entry: { name, source, headers? } where `source`
+   * is a full OpenAPI spec URL (e.g. http://svc.ns.svc.cluster.local/openapi.json).
+   * @returns {Promise<boolean>} True if the mesh was (re)built from explicit sources
+   */
+  async applyExplicitSources() {
+    const raw = process.env.MESH_SOURCES;
+    if (!raw) {
+      console.log('⚠️  EXPLICIT_SOURCES set but MESH_SOURCES is empty; using fallback');
+      return await this.createFallbackConfiguration();
+    }
+
+    let entries;
+    try {
+      entries = JSON.parse(raw);
+    } catch (error) {
+      console.error('❌ Failed to parse MESH_SOURCES JSON:', error.message);
+      return await this.createFallbackConfiguration();
+    }
+    if (!Array.isArray(entries) || entries.length === 0) {
+      console.log('⚠️  MESH_SOURCES is empty/not a list; using fallback');
+      return await this.createFallbackConfiguration();
+    }
+
+    console.log(`🔧 Building GraphQL Mesh from ${entries.length} explicit source(s) (MESH_SOURCES)`);
+
+    const sources = entries.map(entry => {
+      const specUrl = entry.source;
+      // baseUrl = the spec URL minus its path component (host root), so Mesh
+      // resolves operation paths against the service root, not the spec file.
+      let baseUrl = specUrl;
+      try {
+        const u = new URL(specUrl);
+        baseUrl = `${u.protocol}//${u.host}`;
+      } catch (_) { /* leave baseUrl as specUrl if unparseable */ }
+
+      const operationHeaders = Object.assign(this.buildOperationHeaders(), entry.headers || {});
+      return {
+        name: entry.name,
+        handler: {
+          openapi: {
+            source: specUrl,
+            baseUrl,
+            operationHeaders
+          }
+        },
+        transforms: [
+          { prefix: { value: `${this.toPascalCase(entry.name)}_`, includeRootOperations: true } },
+          { namingConvention: { mode: 'bare', typeNames: 'PascalCase', fieldNames: 'camelCase' } }
+        ]
+      };
+    });
+
+    const config = {
+      sources,
+      serve: {
+        port: 8080,
+        hostname: '0.0.0.0',
+        cors: {
+          origin: '*',
+          methods: ['GET', 'POST', 'OPTIONS'],
+          allowedHeaders: ['Content-Type', 'Authorization', 'X-API-Key']
+        },
+        playground: true,
+        introspection: true
+      },
+      logger: { level: 'info' },
+      cache: { redis: false }
+    };
+
+    this.writeMeshConfig(config);
+    const success = await this.rebuildMesh();
+    if (success) {
+      // Track for /status + health without re-running discovery.
+      this.currentServices.clear();
+      entries.forEach(e => this.currentServices.set(e.name, {
+        name: e.name, url: e.source, ready: true, hasOpenApi: true,
+        lastUpdated: new Date().toISOString()
+      }));
+      console.log(`✅ GraphQL Mesh built from ${entries.length} explicit federated source(s)`);
+    }
+    return success;
   }
 
   /**

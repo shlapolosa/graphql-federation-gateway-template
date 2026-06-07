@@ -51,13 +51,13 @@ spec:
           value: "graphql.federation/enabled"
         readinessProbe:
           httpGet:
-            path: /healthz
+            path: /health
             port: 8080
           initialDelaySeconds: 5
           periodSeconds: 5
         livenessProbe:
           httpGet:
-            path: /healthz
+            path: /health
             port: 8080
           initialDelaySeconds: 30
           periodSeconds: 10

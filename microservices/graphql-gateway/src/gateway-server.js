@@ -27,6 +27,11 @@ class GatewayServer {
     this.discoveryInterval = options.discoveryInterval || process.env.DISCOVERY_INTERVAL || '5m';
     this.autoDiscovery = (options.autoDiscovery !== undefined) ? options.autoDiscovery : (process.env.AUTO_DISCOVERY !== 'false');
     
+    // GQL-1 (#155): explicit-sources mode. When EXPLICIT_SOURCES=true the gateway
+    // federates the authoritative MESH_SOURCES list (injected by the CD / app.submit)
+    // and skips kubectl discovery entirely — no cluster RBAC needed, no cold-start race.
+    this.explicitSources = (options.explicitSources !== undefined) ? options.explicitSources : (process.env.EXPLICIT_SOURCES === 'true');
+
     // Gateway configuration
     this.exposePlayground = (options.exposePlayground !== undefined) ? options.exposePlayground : (process.env.EXPOSE_PLAYGROUND !== 'false');
     this.exposeIntrospection = (options.exposeIntrospection !== undefined) ? options.exposeIntrospection : (process.env.EXPOSE_INTROSPECTION === 'true');
@@ -73,8 +78,13 @@ class GatewayServer {
       console.log('🔧 Setting up error handling...');
       this.setupErrorHandling();
       
-      // Start discovery loop if auto-discovery is enabled
-      if (this.autoDiscovery) {
+      // GQL-1 (#155): authoritative explicit sources take precedence over kubectl
+      // discovery. When set, federate MESH_SOURCES directly and do NOT start the
+      // discovery loop (no cluster RBAC dependency, no not-yet-Ready race).
+      if (this.explicitSources) {
+        console.log('📌 EXPLICIT_SOURCES=true — federating MESH_SOURCES, skipping kubectl discovery');
+        await this.meshManager.applyExplicitSources();
+      } else if (this.autoDiscovery) {
         console.log('🔄 Starting service discovery loop...');
         await this.discoveryLoop.start();
       } else {
@@ -88,7 +98,8 @@ class GatewayServer {
       this.isReady = true;
       console.log(`✅ GraphQL Gateway Server running on http://${this.host}:${this.port}`);
       console.log(`   GraphQL Endpoint: http://${this.host}:${this.port}/graphql`);
-      console.log(`   Health Check: http://${this.host}:${this.port}/healthz`);
+      console.log(`   Health Check: http://${this.host}:${this.port}/health`);
+      console.log(`   OpenAPI: http://${this.host}:${this.port}/openapi.json`);
       console.log(`   Status: http://${this.host}:${this.port}/status`);
       
       if (this.exposePlayground) {
@@ -194,15 +205,20 @@ class GatewayServer {
    * Setup API routes
    */
   setupRoutes() {
-    // Health check endpoint
-    this.app.get('/healthz', (req, res) => {
+    // Health check endpoint (k8s probe target). GQL-1 (#155): /health is the platform
+    // contract path served by every other template (python/java); /healthz is kept as
+    // an alias for backward compatibility with older probes.
+    const healthHandler = (req, res) => {
       const meshStatus = this.meshManager.getHealthStatus();
       const discoveryStatus = this.discoveryLoop.getStatus();
-      
+
       const isHealthy = this.isReady && meshStatus.status === 'healthy';
-      
+
       res.status(isHealthy ? 200 : 503).json({
+        // Platform contract shape: {status:"healthy", service:<name>} mirrored from
+        // the python/java templates, plus mesh/discovery detail.
         status: isHealthy ? 'healthy' : 'unhealthy',
+        service: this.namespace ? `${process.env.GATEWAY_NAME || 'graphql-gateway'}` : 'graphql-gateway',
         timestamp: new Date().toISOString(),
         mesh: meshStatus,
         discovery: {
@@ -211,17 +227,42 @@ class GatewayServer {
           lastError: discoveryStatus.lastError
         }
       });
-    });
+    };
+    this.app.get('/health', healthHandler);
+    this.app.get('/healthz', healthHandler);
 
-    // Readiness probe
-    this.app.get('/readyz', (req, res) => {
+    // Readiness probe — /ready (platform contract) + /readyz (legacy alias).
+    const readyHandler = (req, res) => {
       const schema = this.meshManager.getSchema();
       const isReady = this.isReady && !!schema;
-      
+
       res.status(isReady ? 200 : 503).json({
         ready: isReady,
         schema: !!schema,
         timestamp: new Date().toISOString()
+      });
+    };
+    this.app.get('/ready', readyHandler);
+    this.app.get('/readyz', readyHandler);
+
+    // GQL-1 (#155): /openapi.json — the gateway exposes its own minimal OpenAPI so it
+    // satisfies the same probe/expose-api contract as python/java services and so a
+    // future gateway-of-gateways could federate it. The federated GraphQL schema lives
+    // at /graphql; this stub describes the gateway's own HTTP surface.
+    this.app.get('/openapi.json', (req, res) => {
+      const name = process.env.GATEWAY_NAME || 'graphql-gateway';
+      res.json({
+        openapi: '3.0.0',
+        info: { title: `${name} GraphQL Gateway`, version: '1.0.0' },
+        paths: {
+          '/graphql': {
+            post: {
+              summary: 'GraphQL federation endpoint',
+              responses: { '200': { description: 'GraphQL response' } }
+            }
+          },
+          '/health': { get: { summary: 'Health check', responses: { '200': { description: 'healthy' } } } }
+        }
       });
     });
 
@@ -311,8 +352,9 @@ class GatewayServer {
         version: '1.0.0',
         endpoints: {
           graphql: '/graphql',
-          health: '/healthz',
-          ready: '/readyz',
+          health: '/health',
+          ready: '/ready',
+          openapi: '/openapi.json',
           status: '/status',
           metrics: '/metrics'
         },

@@ -151,6 +151,20 @@ run_background_discovery() {
     done
 }
 
+# GQL-1 (#155): explicit-sources mode. When EXPLICIT_SOURCES=true the node engine
+# (src/index.js) federates the authoritative MESH_SOURCES list itself and needs NO
+# kubectl access and NO bash-side pre-generation/background discovery. Hand straight
+# to node, skipping the entire bash discovery layer below.
+if [[ "$EXPLICIT_SOURCES" == "true" ]]; then
+    echo "📌 EXPLICIT_SOURCES=true — handing off to node engine (no kubectl, no bash discovery)"
+    trap 'kill "$SERVER_PID" 2>/dev/null || true' SIGTERM SIGINT
+    node src/index.js &
+    SERVER_PID=$!
+    echo "📡 Server started (PID: $SERVER_PID)"
+    wait "$SERVER_PID"
+    exit $?
+fi
+
 # Initial setup
 echo "🔧 Initial setup..."
 
