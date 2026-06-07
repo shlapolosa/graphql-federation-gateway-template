@@ -78,7 +78,8 @@ class SchemaGenerator {
    * @returns {string} GraphQL type definitions
    */
   generateTypesFromSchemas(schemas) {
-    let typeDefs = '';\n    
+    let typeDefs = '';
+    
     Object.entries(schemas).forEach(([name, schema]) => {
       const typeName = this.toPascalCase(name);
       
