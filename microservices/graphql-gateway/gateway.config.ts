@@ -15,6 +15,33 @@ import { defineConfig } from '@graphql-hive/gateway';
 const FORWARD_AUTH = process.env.FORWARD_AUTH !== 'false';
 const SERVICE = process.env.GATEWAY_NAME || 'graphql-gateway';
 
+// EVENT-2 (expose-api sensor) publishes to APIM by importing this gateway's
+// /openapi.json (parity with the python/old-bespoke templates). Hive serves
+// /graphql, so we expose a minimal 1-operation OpenAPI describing POST /graphql
+// — APIM imports it, then proxies /graphql through. (caught patient11-graph
+// 2026-06-09: Hive dropped the /openapi.json alias the bespoke gateway had.)
+const OPENAPI = {
+  openapi: '3.0.1',
+  info: { title: `${SERVICE} GraphQL Gateway`, version: '1.0.0',
+          description: 'Federated GraphQL endpoint (GraphQL Hive Gateway)' },
+  servers: [{ url: '/' }],
+  paths: {
+    '/graphql': {
+      post: {
+        operationId: 'graphql',
+        summary: 'Execute a federated GraphQL query',
+        requestBody: { required: true, content: { 'application/json': { schema: {
+          type: 'object',
+          properties: { query: { type: 'string' }, variables: { type: 'object' },
+                        operationName: { type: 'string' } },
+          required: ['query'] } } } },
+        responses: { '200': { description: 'GraphQL response',
+          content: { 'application/json': { schema: { type: 'object' } } } } },
+      },
+    },
+  },
+};
+
 export const gatewayConfig = defineConfig({
   graphqlEndpoint: '/graphql',
   // Keep Hive's native health/readiness off the platform contract path so the JSON
@@ -38,6 +65,14 @@ export const gatewayConfig = defineConfig({
         if (path === '/health' || path === '/healthz') {
           endResponse(
             new Response(JSON.stringify({ status: 'healthy', service: SERVICE }), {
+              status: 200,
+              headers: { 'content-type': 'application/json' },
+            }),
+          );
+        }
+        if (path === '/openapi.json') {
+          endResponse(
+            new Response(JSON.stringify(OPENAPI), {
               status: 200,
               headers: { 'content-type': 'application/json' },
             }),
