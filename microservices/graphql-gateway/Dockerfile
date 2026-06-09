@@ -1,91 +1,36 @@
-# GraphQL Mesh Gateway Docker Image
-# Multi-stage build for optimized production image with proper native dependency compilation
-FROM node:18-alpine AS builder
+# GQL-HIVE-MIGRATE (#160): GraphQL Hive Gateway (Mesh v1) image.
+# compose -> serve pipeline: mesh-compose generates a supergraph from MESH_SOURCES at
+# container start, hive-gateway serves it on :8080.
+FROM node:20-alpine AS builder
 
-# Install build dependencies for node-gyp compilation
-RUN apk add --no-cache --virtual .build-deps \
-    bash \
-    curl \
-    jq \
-    git \
-    python3 \
-    make \
-    g++ \
-    libc6-compat \
-    libstdc++ \
-    pkgconfig \
-    autoconf \
-    automake \
-    libtool \
-    nasm \
-    build-base
-
-# Set working directory
 WORKDIR /app
 
-# Copy package files
-COPY package*.json ./
-
-# Install ALL dependencies for building (including native compilation)
-RUN npm install --legacy-peer-deps
-
-# Copy application source
-COPY src/ ./src/
-COPY mesh-config-template.yaml ./
-COPY generate-mesh-config.sh ./
-# Main entry point is src/index.js
-COPY start.sh ./
-
-# Make scripts executable
-RUN chmod +x generate-mesh-config.sh start.sh
-
-# Clean up build dependencies to reduce image size
-RUN apk del .build-deps
+COPY package.json ./
+# No native compilation needed for the Hive stack; plain install, no --force / --legacy-peer-deps.
+RUN npm install --omit=dev
 
 # Production stage
-FROM node:18-alpine AS production
+FROM node:20-alpine AS production
 
-# Install only runtime dependencies
-RUN apk add --no-cache \
-    bash \
-    curl \
-    jq \
-    yq \
-    kubectl \
-    git \
-    libc6-compat
-
-# Set working directory
 WORKDIR /app
 
-# Copy built application and compiled dependencies from builder stage
 COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/src ./src
-COPY --from=builder /app/mesh-config-template.yaml ./
-COPY --from=builder /app/generate-mesh-config.sh ./
-# Main entry point is src/index.js (already copied with src/)
-COPY --from=builder /app/start.sh ./
-COPY --from=builder /app/package*.json ./
+COPY package.json mesh.config.ts gateway.config.ts start.sh ./
 
-# Ensure scripts are executable
-RUN chmod +x generate-mesh-config.sh start.sh
+RUN chmod +x start.sh
 
-# Create non-root user
-RUN addgroup -g 1001 -S mesh && \
-    adduser -S mesh -u 1001 -G mesh
+# Writable supergraph output dir. Under Knative runAsNonRoot the root FS may be
+# read-only; the CD mounts an emptyDir at /app/config. Pre-create + world-writable so
+# the numeric (non-named) user can write the composed supergraph even before the mount.
+RUN mkdir -p /app/config && chmod 0777 /app/config
 
-# Change ownership of the app directory
-RUN chown -R mesh:mesh /app
+# Knative runAsNonRoot rejects named users — use a NUMERIC uid.
+USER 1000
 
-# Switch to non-root user
-USER mesh
-
-# Expose port
 EXPOSE 8080
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-  CMD curl -f http://localhost:8080/health || exit 1
+# k8s probe contract: /health -> 200 JSON.
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+  CMD wget -qO- http://localhost:8080/health || exit 1
 
-# Start the application
 ENTRYPOINT ["./start.sh"]

@@ -1,45 +1,30 @@
 {
-  "name": "graphql-mesh-gateway",
-  "version": "1.0.0",
-  "description": "Production-ready GraphQL federation gateway for Kubernetes services with auto-discovery",
-  "main": "src/index.js",
+  "name": "graphql-hive-gateway",
+  "version": "2.0.0",
+  "description": "GraphQL federation gateway (GraphQL Hive Gateway / Mesh v1) for Kubernetes services. Composes OpenAPI subgraphs from MESH_SOURCES into a federated supergraph.",
+  "private": true,
+  "type": "module",
   "scripts": {
-    "start": "node src/index.js",
-    "dev": "NODE_ENV=development node src/index.js",
-    "legacy:start": "node server.js"
+    "compose": "mesh-compose -c mesh.config.ts -o ${CONFIG_DIR:-/app/config}/supergraph.graphql",
+    "start": "./start.sh"
   },
   "dependencies": {
-    "@graphql-mesh/config": "0.108.7",
-    "@graphql-mesh/openapi": "0.106.6",
-    "@graphql-mesh/runtime": "0.106.6",
-    "@graphql-mesh/transform-naming-convention": "0.102.13",
-    "@graphql-mesh/transform-prefix": "0.102.13",
-    "@graphql-tools/schema": "^10.0.0",
-    "@graphql-tools/stitch": "^9.0.0",
-    "@graphql-tools/utils": "^10.0.13",
-    "compression": "^1.7.4",
-    "cors": "^2.8.5",
-    "express": "^4.18.2",
-    "express-graphql": "^0.12.0",
-    "express-rate-limit": "^6.7.0",
-    "graphql": "^16.8.1",
-    "helmet": "^7.0.0",
-    "js-yaml": "^4.1.0",
-    "node-fetch": "^2.7.0"
+    "@graphql-hive/gateway": "2.8.3",
+    "@graphql-mesh/compose-cli": "1.5.32",
+    "@omnigraph/openapi": "0.109.52",
+    "graphql": "16.11.0"
   },
   "engines": {
-    "node": ">=16.0.0",
-    "npm": ">=7.0.0"
+    "node": ">=18.0.0"
   },
   "keywords": [
     "graphql",
     "gateway",
     "federation",
-    "kubernetes",
-    "microservices",
-    "api-gateway",
-    "service-discovery",
-    "openapi"
+    "hive",
+    "graphql-mesh",
+    "openapi",
+    "kubernetes"
   ],
   "author": "Health Service IDP Platform",
   "license": "MIT"
