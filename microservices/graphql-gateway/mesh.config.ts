@@ -14,6 +14,12 @@ import { loadOpenAPISubgraph } from '@omnigraph/openapi';
 
 const FORWARD_AUTH = process.env.FORWARD_AUTH !== 'false';
 
+// GraphQL names must match [_a-zA-Z0-9] — service names contain hyphens
+// (e.g. patient11-api), which break the prefix transform / subgraph naming
+// ("Names must only contain [_a-zA-Z0-9]"). Sanitize to underscores.
+// (caught patient11-api 2026-06-09; local proof used hyphen-free Src1/Src2.)
+const gqlSafe = (s: string): string => s.replace(/[^_a-zA-Z0-9]/g, '_');
+
 interface MeshSource {
   name: string;
   source: string;
@@ -45,13 +51,13 @@ export const composeConfig = defineConfig({
     }
 
     return {
-      sourceHandler: loadOpenAPISubgraph(e.name, {
+      sourceHandler: loadOpenAPISubgraph(gqlSafe(e.name), {
         source: e.source,
         endpoint,
         operationHeaders,
       }),
       transforms: [
-        createPrefixTransform({ value: `${e.name}_`, includeRootOperations: true }),
+        createPrefixTransform({ value: `${gqlSafe(e.name)}_`, includeRootOperations: true }),
       ],
     };
   }),
